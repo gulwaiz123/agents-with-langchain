@@ -63,6 +63,40 @@ src/learning_companion/   config.py, chain.py, main.py
 tests/                    one tiny health test at most
 ```
 
+## Message flow (Stories 2.1 and 2.2)
+
+```
+Open WebUI request (messages of the active chat)
+  → latest user message + up to 10 earlier user/assistant messages, in order
+    (client "system" messages and empty content are skipped)
+  → [system: Learning Companion instruction (app-owned), history, human: latest message]
+  → Gemini → text answer → OpenAI-compatible JSON or SSE
+```
+
+- History comes only from the current request. Limit: the 10 most recent earlier messages (`MAX_HISTORY_MESSAGES`).
+- No-persistence boundary: nothing is stored or remembered after a request finishes. No database, cache or cross-session memory. A new chat starts fresh.
+- In development (`APP_ENV=development`), `dev_log.py` prints a readable request block (payload, role sequence, messages sent to the model) and a reply block (text, time). Settings and API keys are never logged.
+
+## The `/study` routing rule (Story 3.2)
+
+```
+Open WebUI request → latest user message
+  → if it starts with "/study": strip that marker → study helper chain
+  → else: general chat chain
+  → text answer, starting with a label "[route: general]" or "[route: study]"
+```
+
+The rule is `choose_route` in `routing.py`: ordinary Python, no model involved. Both chains share the same history and the same normal/streaming adapter. The route is also logged in development. Boundary: this is deterministic application routing, not LLM classification, LangGraph or multi-agent orchestration. Story 4.1 replaces the `if/else` with an explicit LangGraph route.
+
+## Chain behaviours (Story 3.1)
+
+| Chain | Responsibility | Used by the endpoint? |
+|---|---|---|
+| General chat (`build_chain`) | Greetings and ordinary conversation. | Yes, for every other message. |
+| Study helper (`build_study_helper_chain`) | Plain-language explanation of a beginner technical idea, a small example where useful, and one next learning step. Does not search, browse or retrieve course data. | Yes, for messages starting with `/study` (Story 3.2). Also available via `uv run python -m learning_companion.try_study_helper "<question>"`. |
+
+Both use the same prompt shape (application instruction, history, current message), the same configured Gemini model and the same history handling. Story 3.1 creates the study-helper capability only; choosing between the chains is the next story.
+
 ## Story 1.1 scope
 
-One fixed Learning Companion instruction plus the latest user message, behind the same chat endpoint for normal and streaming requests. Full prompt construction and conversation history arrive in Story 2.1.
+One fixed Learning Companion instruction plus the latest user message, behind the same chat endpoint for normal and streaming requests. Story 2.1 turned this into a reusable prompt template; conversation history arrives in Story 2.2.
