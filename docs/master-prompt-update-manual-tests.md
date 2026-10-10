@@ -1,14 +1,14 @@
 # Master prompt — Update curl manual tests for one story
 
-Paste this prompt into your coding assistant from the capstone repository. Replace `<STORY_NUMBER>` with the implemented story number, for example `3.2`, `1.4`, `3.2`, or `3.4`.
+Paste this prompt into your coding assistant from the capstone repository. Replace `<STORY_NUMBER>` with the implemented story number, for example `4.2`, `1.4`, `4.2`, or `3.4`.
 
 ---
 
-The implemented story is **Story `3.2`**. Update `docs/manual-tests.md` with a short manual-test section for this story. Change only `docs/manual-tests.md`; do not implement or change product code, configuration, tests, data, or story files.
+The implemented story is **Story `4.2`**. Update `docs/manual-tests.md` with a short manual-test section for this story. Change only `docs/manual-tests.md`; do not implement or change product code, configuration, tests, data, or story files.
 
-First read the implemented story in `docs/stories/`, its actual routes and request/response models, and the current `docs/manual-tests.md`. If no story exactly matches `3.2`, stop and report that. Use the current code as the authority; do not invent endpoints, payload fields, model IDs, response fields, or expected behavior.
+First read the implemented story in `docs/stories/`, its actual routes and request/response models, and the current `docs/manual-tests.md`. If no story exactly matches `4.2`, stop and report that. Use the current code as the authority; do not invent endpoints, payload fields, model IDs, response fields, or expected behavior.
 
-Create or replace only the section headed `## Story 3.2 — ...`. Preserve every other story section. Keep this section short:
+Create or replace only the section headed `## Story 4.2 — ...`. Preserve every other story section. Keep this section short:
 
 1. One sentence: **What it adds**.
 2. One short prerequisite note only when needed, such as starting the API or setting a named `.env` variable. Never include a secret value.

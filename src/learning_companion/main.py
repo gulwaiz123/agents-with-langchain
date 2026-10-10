@@ -1,4 +1,5 @@
 import json
+import re
 import time
 import uuid
 from typing import Literal
@@ -8,16 +9,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel
 
-from learning_companion.chain import (
-    PROMPT,
-    STUDY_HELPER_PROMPT,
-    ConfigurationError,
-    build_chain,
-    build_study_helper_chain,
-)
+from learning_companion.chain import PROMPT, STUDY_HELPER_PROMPT, ConfigurationError
 from learning_companion.config import get_settings
 from learning_companion.dev_log import log_request, log_response
-from learning_companion.routing import STUDY, choose_route
+from learning_companion.graph import run_graph
+from learning_companion.routing import STUDY
 
 app = FastAPI(title="Learning Companion")
 
@@ -32,10 +28,6 @@ class ChatRequest(BaseModel):
     messages: list[Message]
     stream: bool = False
 
-
-STUDY_NEEDS_QUESTION = (
-    "What would you like to study? Try `/study Explain what an API is`."
-)
 
 # Only this many recent earlier messages from the current request are used.
 # Nothing is stored: history exists only for the length of one request.
@@ -95,56 +87,38 @@ def list_models():
 @app.post("/v1/chat/completions")
 def chat_completions(request: ChatRequest):
     history, question = _split_request(request.messages)
-    route, question = choose_route(question)
-    label = f"[route: {route}]\n\n"
+    started = time.perf_counter()
+    try:
+        state, nodes = run_graph(history, question)
+    except ConfigurationError as error:
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"message": str(error), "type": "configuration_error"}},
+        )
 
-    # "/study" with nothing after it: ask for a topic instead of calling the model.
-    chain = None
-    if route == STUDY and not question:
-        prompt = STUDY_HELPER_PROMPT
-    else:
-        try:
-            if route == STUDY:  # the visible if/else: pick the chain
-                chain, prompt = (
-                    build_study_helper_chain(get_settings()),
-                    STUDY_HELPER_PROMPT,
-                )
-            else:
-                chain, prompt = build_chain(get_settings()), PROMPT
-        except ConfigurationError as error:
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "error": {"message": str(error), "type": "configuration_error"}
-                },
-            )
-
-    inputs = {"history": history, "question": question}
+    route = state["route"]
+    answer = f"[route: {route}]\n\n{state['final_answer']}"
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
-    dev = get_settings().app_env == "development"
-    if dev:
+    if get_settings().app_env == "development":
+        prompt = STUDY_HELPER_PROMPT if route == STUDY else PROMPT
         log_request(
             completion_id,
             request.model_dump(),
-            prompt.format_messages(**inputs),
+            prompt.format_messages(history=history, question=state["user_message"]),
             len(history),
             route,
+            nodes,
+            {
+                "decision": state["review_decision"],
+                "reason": state["review_reason"],
+                "revisions": state["revision_count"],
+            },
         )
-    started = time.perf_counter()
-
-    def pieces():
-        yield label
-        if chain is None:
-            yield STUDY_NEEDS_QUESTION
-        else:
-            yield from (
-                chain.stream(inputs) if request.stream else [chain.invoke(inputs)]
-            )
+        log_response(
+            completion_id, answer, time.perf_counter() - started, request.stream
+        )
 
     if not request.stream:
-        answer = "".join(pieces())
-        if dev:
-            log_response(completion_id, answer, time.perf_counter() - started, False)
         return {
             "id": completion_id,
             "object": "chat.completion",
@@ -161,15 +135,9 @@ def chat_completions(request: ChatRequest):
 
     def events():
         yield _chunk(completion_id, request.model, {"role": "assistant"}, None)
-        parts = []
-        for text in pieces():
-            if text:
-                parts.append(text)
-                yield _chunk(completion_id, request.model, {"content": text}, None)
-        if dev:
-            log_response(
-                completion_id, "".join(parts), time.perf_counter() - started, True
-            )
+        # The graph returns the finished answer; send it as small text chunks.
+        for text in re.findall(r"\S+\s*|\s+", answer):
+            yield _chunk(completion_id, request.model, {"content": text}, None)
         yield _chunk(completion_id, request.model, {}, "stop")
         yield "data: [DONE]\n\n"
 

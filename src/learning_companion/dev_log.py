@@ -36,12 +36,18 @@ def log_request(
     prompt_messages: list[BaseMessage],
     history_count: int,
     route: str,
+    nodes: list[str],
+    review: dict,
 ) -> None:
     roles = " -> ".join(m.type for m in prompt_messages)
     lines = [
         f" id        : {completion_id}",
         f" model     : {payload.get('model')}    stream: {payload.get('stream')}",
         f" route     : {route}",
+        f" nodes     : {' -> '.join(nodes)}",
+        f" review    : {review['decision'] or 'skipped'}"
+        + (f" ({review['reason']})" if review["reason"] else ""),
+        f" revisions : {review['revisions']}",
         f" history   : {history_count} earlier message(s) used",
         f" prompt    : {roles}  ({len(prompt_messages)} messages)",
         "",

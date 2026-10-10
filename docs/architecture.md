@@ -77,6 +77,44 @@ Open WebUI request (messages of the active chat)
 - No-persistence boundary: nothing is stored or remembered after a request finishes. No database, cache or cross-session memory. A new chat starts fresh.
 - In development (`APP_ENV=development`), `dev_log.py` prints a readable request block (payload, role sequence, messages sent to the model) and a reply block (text, time). Settings and API keys are never logged.
 
+## The routing and review graph (Stories 4.1 and 4.2)
+
+`src/learning_companion/graph.py` is one small LangGraph workflow with a plain-Python router and one bounded review cycle:
+
+```
+START → router ─┬─ general → general_chat ─────────────→ reviewer ─┬─ approve ──────────→ END
+                └─ study   → study_helper ─┬─ answer ──→ reviewer  │
+                                           └─ bare /study ───────────────────────────────→ END
+                                                          reviewer ─┴─ improve (only if revision_count = 0) → improver → reviewer
+```
+
+State (the shared notebook):
+
+| Field | Meaning |
+|---|---|
+| `user_message` | What was just asked (`/study` marker removed by the router). |
+| `messages` | Earlier chat messages from this request (history). |
+| `route` | `general` or `study`. |
+| `draft_answer` | The answer as currently written; the improver replaces it. |
+| `review_decision` | `approve` or `improve`. |
+| `review_reason` | One short sentence from the reviewer. |
+| `revision_count` | Rewrites so far: starts at 0, never above 1. |
+| `final_answer` | The reply sent to Open WebUI, written only when finishing. |
+
+| Node | Kind | Single responsibility |
+|---|---|---|
+| `router` | Ordinary Python, not an agent | Applies the `/study` rule, strips the marker, writes `route`. |
+| `general_chat` | LLM specialist | Writes a draft using the general-chat chain. |
+| `study_helper` | LLM specialist | Writes a draft using the study-helper chain. A bare `/study` writes a fixed reply straight to `final_answer` (no model, no review). |
+| `reviewer` | LLM specialist | Checks the draft against one short fixed classroom rule and returns a structured `approve`/`improve` plus one reason. When `revision_count` is 1 it makes no model call and accepts the current draft. |
+| `improver` | LLM specialist | Rewrites the draft once using the reviewer's reason and increments `revision_count`. No tools, browsing, retrieval, planning or routing. |
+
+Edge rules: `START → router`; conditional from `router` on `route`; each answer node → `reviewer`; `approve → END`; `improve → improver` only while `revision_count` is 0; `improver → reviewer`. The one visible cycle is reviewer → improver → reviewer, so there is at most one improvement. There is no other loop, retry, planner, tool or open-ended agent behaviour.
+
+The endpoint adds the `[route: ...]` label to `final_answer` and returns it as normal JSON, or as text-only SSE chunks ending with `data: [DONE]` (the finished answer is sent in small chunks). In development the log shows the route, node sequence, review decision and reason, and revision count (never keys or settings).
+
+Scope boundary: no databases, persistence, RAG, web search, tool execution, MCP, human approval or extra agents. A node is a focused piece of work, not automatically an agent. An MCP call could live inside a future node but is not implemented.
+
 ## The `/study` routing rule (Story 3.2)
 
 ```
@@ -86,7 +124,7 @@ Open WebUI request → latest user message
   → text answer, starting with a label "[route: general]" or "[route: study]"
 ```
 
-The rule is `choose_route` in `routing.py`: ordinary Python, no model involved. Both chains share the same history and the same normal/streaming adapter. The route is also logged in development. Boundary: this is deterministic application routing, not LLM classification, LangGraph or multi-agent orchestration. Story 4.1 replaces the `if/else` with an explicit LangGraph route.
+The rule is `choose_route` in `routing.py`: ordinary Python, no model involved. Both chains share the same history and the same normal/streaming adapter. The route is also logged in development. Boundary: this is deterministic application routing, not LLM classification, LangGraph or multi-agent orchestration. Story 4.1 moved this rule into the router node of a LangGraph workflow.
 
 ## Chain behaviours (Story 3.1)
 

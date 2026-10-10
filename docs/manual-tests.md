@@ -131,3 +131,63 @@ Expected:
 - The second request starts with `[route: study]`, then a plain explanation of an API ending with one next learning step. The log shows `route : study` and the messages sent to the model do not contain `/study`.
 - The third request streams `chat.completion.chunk` events, the first text chunk being `[route: study]`, then the explanation, and ends with `data: [DONE]`.
 - The last request (marker only) returns `[route: study]` followed by `What would you like to study? Try `/study Explain what an API is`.` without calling the model. If the key or model name is missing, the first three requests instead return HTTP 500 with `error.type` `configuration_error`.
+
+## Story 4.1 — LangGraph routing workflow
+
+**What it adds:** the `/study` rule now runs as a small LangGraph workflow (`router` → `general_chat` or `study_helper` → end) behind the same `/v1/chat/completions` endpoint, with the node sequence in the development log.
+
+Prerequisite: API running with `GEMINI_API_KEY` and `GEMINI_MODEL_NAME` set in `.env` and `APP_ENV=development`. Replace `YOUR_GEMINI_MODEL_NAME` with the value of `GEMINI_MODEL_NAME`.
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "YOUR_GEMINI_MODEL_NAME", "messages": [{"role": "user", "content": "Hello!"}], "stream": false}'
+
+curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "YOUR_GEMINI_MODEL_NAME", "messages": [{"role": "user", "content": "/study Explain what an API is"}], "stream": false}'
+
+curl -N -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "YOUR_GEMINI_MODEL_NAME", "messages": [{"role": "user", "content": "/study Explain what an API is"}], "stream": true}'
+
+curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "YOUR_GEMINI_MODEL_NAME", "messages": [{"role": "user", "content": "/study"}], "stream": false}'
+```
+
+Expected:
+- The first request returns a `chat.completion` JSON with `finish_reason` `stop`; the content starts with `[route: general]` and a friendly reply. The API log shows `route : general` and `nodes : router -> general_chat`.
+- The second request starts with `[route: study]`, then a plain explanation ending with one next learning step. The log shows `route : study` and `nodes : router -> study_helper`.
+- The third request returns `chat.completion.chunk` events (the finished answer sent in small text chunks, the first starting with `[route: study]`) and ends with `data: [DONE]`.
+- The last request (marker only) returns `[route: study]` and `What would you like to study? Try `/study Explain what an API is`.` without calling the model; the log shows `router -> study_helper`. If the key or model name is missing, the first three requests instead return HTTP 500 with `error.type` `configuration_error`.
+
+## Story 4.2 — Bounded review and improve
+
+**What it adds:** every drafted answer is checked once by a reviewer node and rewritten at most once by an improver node (reviewer → improver → reviewer) before the final answer is returned from the same `/v1/chat/completions` endpoint.
+
+Prerequisite: API running with `GEMINI_API_KEY` and `GEMINI_MODEL_NAME` set in `.env` and `APP_ENV=development`. Replace `YOUR_GEMINI_MODEL_NAME` with the value of `GEMINI_MODEL_NAME`.
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "YOUR_GEMINI_MODEL_NAME", "messages": [{"role": "user", "content": "Hello!"}], "stream": false}'
+
+curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "YOUR_GEMINI_MODEL_NAME", "messages": [{"role": "user", "content": "/study Explain what polymorphism is in object-oriented programming, with every technical term"}], "stream": false}'
+
+curl -N -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "YOUR_GEMINI_MODEL_NAME", "messages": [{"role": "user", "content": "/study Explain what an API is"}], "stream": true}'
+
+curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "YOUR_GEMINI_MODEL_NAME", "messages": [{"role": "user", "content": "/study"}], "stream": false}'
+```
+
+Expected:
+- The first request returns a `chat.completion` JSON with `finish_reason` `stop` and content starting `[route: general]`. The API log shows `nodes : router -> general_chat -> reviewer`, `review : approve (...)` and `revisions : 0`.
+- The second request starts with `[route: study]`, a plain explanation and one next step. The log shows `router -> study_helper -> reviewer`; if the reviewer says `improve`, it instead shows `router -> study_helper -> reviewer -> improver -> reviewer` and `revisions : 1`. `revisions` is never above 1. The reviewer may approve the first draft, so this path is not guaranteed.
+- The third request returns `chat.completion.chunk` events (the finished answer in small text chunks) and ends with `data: [DONE]`.
+- The last request (marker only) returns `[route: study]` and the "What would you like to study?" prompt with no model call and no review: the log shows `nodes : router -> study_helper`, `review : skipped`. If the key or model name is missing, the first three requests instead return HTTP 500 with `error.type` `configuration_error`.
